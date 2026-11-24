@@ -9,6 +9,7 @@ Run with:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,24 @@ from brewlab.simulation.engine import simulate_batch
 from brewlab.units import ureg
 
 STORE_DIR = Path(".brewlab_store_gui")
+TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "recipes" / "templates"
+
+
+def _load_template_recipes() -> dict[str, dict[str, Any]]:
+    """Load all preloaded benchmark recipes from recipes/templates/."""
+    templates: dict[str, dict[str, Any]] = {}
+    if not TEMPLATES_DIR.exists():
+        return templates
+    for path in sorted(TEMPLATES_DIR.glob("*.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            name = data.get("name", path.stem.replace("_", " ").title())
+            templates[name] = data
+        except Exception:  # noqa: BLE001 — skip malformed templates
+            continue
+    return templates
+
 
 FLAVOR_DIMS = [
     ("Bitterness", "ibu"),
@@ -524,6 +543,33 @@ def _render_scenario_manager() -> tuple[dict[str, dict[str, Any]], str]:
     if st.sidebar.button("Run all simulations", type="primary", use_container_width=True):
         st.session_state["results"] = _run_all(scenarios)
         st.sidebar.success(f"Ran {len(scenarios)} scenario(s).")
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Benchmark templates")
+    templates = _load_template_recipes()
+    if templates:
+        tmpl_name = st.sidebar.selectbox(
+            "Load template", ["(none)"] + sorted(templates.keys()), key="tmpl_select"
+        )
+        col_load, col_load_all = st.sidebar.columns(2)
+        if col_load.button("Load into active", use_container_width=True) and tmpl_name != "(none)":
+            scenarios[active] = templates[tmpl_name]
+            st.session_state["scenarios"] = scenarios
+            st.session_state["results"] = {}
+            st.sidebar.success(f"Loaded '{tmpl_name}' into '{active}'.")
+            st.rerun()
+        if col_load_all.button("Add all as scenarios", use_container_width=True):
+            added = 0
+            for name, recipe in templates.items():
+                if name not in scenarios:
+                    scenarios[name] = recipe
+                    added += 1
+            st.session_state["scenarios"] = scenarios
+            st.session_state["results"] = {}
+            st.sidebar.success(f"Added {added} template scenario(s).")
+            st.rerun()
+    else:
+        st.sidebar.caption("No benchmark templates found.")
 
     return scenarios, active
 

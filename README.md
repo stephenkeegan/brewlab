@@ -78,6 +78,15 @@ streamlit run src/brewlab/gui/app.py
 The GUI imports only from the simulation and persistence layers (never the
 other way around), preserving the strict core/UI boundary.
 
+### Benchmark templates
+
+The GUI ships with preloaded benchmark recipes under `recipes/templates/`
+(American Pale Ale, India Pale Ale, Oatmeal Stout, German Pilsner,
+Hefeweizen). In the sidebar, use **Benchmark templates** → **Load template**
+to load one into the active scenario, or **Add all as scenarios** to compare
+all of them side by side in the comparison tabs.
+
+
 ## Python API
 
 ### Coupled simulation

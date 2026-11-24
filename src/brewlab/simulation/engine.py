@@ -11,6 +11,7 @@ results plus an aggregated batch summary.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,11 +37,24 @@ from brewlab.core.kinetics import (
     saccharification_conversion,
 )
 from brewlab.core.thermodynamics import strike_water_temperature
+from brewlab.domain.yeast_library import YeastLibrary
 from brewlab.units import Quantity, ureg
 
 _CP_GRAIN = ureg.Quantity(1.0, "kilojoule / (kilogram * degC)")
 _CP_WATER = ureg.Quantity(4.186, "kilojoule / (kilogram * degC)")
 _BOIL_TEMP = ureg.Quantity(100.0, "degC")
+
+_YEAST_LIBRARY = YeastLibrary()
+
+_LB_PER_KG = 2.20462
+_GAL_PER_L = 0.264172
+
+
+def _srm_from_mcu(mcu: float) -> float:
+    """Morey SRM estimate: SRM = 1.4922 * MCU^0.6859."""
+    if mcu <= 0.0:
+        return 0.0
+    return 1.4922 * math.pow(mcu, 0.6859)
 
 
 def _q(value: float, unit: str) -> Quantity:
@@ -116,6 +130,8 @@ def simulate_batch(
         _q(water.get("magnesium_mg_per_l", 10.0), "milligram / liter"),
     )
     water_ph = carbonate_system_ph(alkalinity, target_temp, _q(0.0004, "atm"))
+    chloride_mg_per_l = water.get("chloride_mg_per_l", 50.0)
+    sulfate_mg_per_l = water.get("sulfate_mg_per_l", 50.0)
 
     conversion = saccharification_conversion(
         _q(recipe["mash_duration_minutes"], "minute"), target_temp
@@ -222,6 +238,15 @@ def simulate_batch(
 
     # Initial sugar from post-boil plato: approx plato * 10 g/L
     initial_sugar_g_per_l = post_boil_plato.to("degPlato").magnitude * 10.0
+
+    # Yeast strain lookup for attenuation bounds and temperature range.
+    yeast_strain_id = recipe.get("yeast_strain_id")
+    yeast_strain = _YEAST_LIBRARY.get(yeast_strain_id) if yeast_strain_id else None
+    att_min = yeast_strain.attenuation_min if yeast_strain is not None else None
+    att_max = yeast_strain.attenuation_max if yeast_strain is not None else None
+    temp_min = yeast_strain.temperature_min if yeast_strain is not None else None
+    temp_max = yeast_strain.temperature_max if yeast_strain is not None else None
+
     ferm_result = fermentation_time_series(
         _q(initial_sugar_g_per_l, "gram / liter"),
         _q(
@@ -231,6 +256,10 @@ def simulate_batch(
         _q(ferment_section.get("volume_liters", post_boil_volume.to("liter").magnitude), "liter"),
         ferm_temp,
         ferm_duration,
+        attenuation_min=att_min,
+        attenuation_max=att_max,
+        temperature_min=temp_min,
+        temperature_max=temp_max,
     )
 
     ferment = {
@@ -241,19 +270,47 @@ def simulate_batch(
         "final_fg_plato": round(ferm_result["final_fg_plato"], 3),
         "final_abv_percent": round(ferm_result["final_abv_percent"], 2),
         "final_ethanol_g_per_L": round(ferm_result["final_ethanol_g_per_L"], 2),
+        "temperature_warning": ferm_result["temperature_warning"],
+        "yeast_strain_id": yeast_strain_id,
+        "yeast_attenuation_min": (
+            round(yeast_strain.attenuation_min.magnitude, 4) if yeast_strain else None
+        ),
+        "yeast_attenuation_max": (
+            round(yeast_strain.attenuation_max.magnitude, 4) if yeast_strain else None
+        ),
         "model_contributions": ferm_result["model_contributions"],
     }
 
     # ---------- Summary ----------
+    # SRM via Morey equation from single-grain color (degLovibond).
+    grain_color_lovibond = recipe.get("grain_color_lovibond", 2.0)
+    grain_lbs = grain_mass.to("kilogram").magnitude * _LB_PER_KG
+    volume_gals = _q(recipe["batch_size_liters"], "liter").to("liter").magnitude * _GAL_PER_L
+    mcu = (grain_lbs * grain_color_lovibond) / volume_gals if volume_gals > 0 else 0.0
+    srm = _srm_from_mcu(mcu)
+
+    # Chloride:sulfate ratio drives perceived malt vs. hop balance.
+    chloride_sulfate_ratio = chloride_mg_per_l / sulfate_mg_per_l if sulfate_mg_per_l > 0 else None
+
     summary = {
         "name": recipe.get("name", "batch"),
         "og_plato": round(mash_plato.to("degPlato").magnitude, 2),
         "fg_plato": round(ferm_result["final_fg_plato"], 3),
         "abv_percent": round(ferm_result["final_abv_percent"], 2),
         "ibu": round(total_ibu, 2),
-        "srm": None,  # color model not yet implemented
+        "srm": round(srm, 2),
+        "chloride_sulfate_ratio": (
+            round(chloride_sulfate_ratio, 2) if chloride_sulfate_ratio is not None else None
+        ),
         "volume_liters": round(post_boil_volume.to("liter").magnitude, 2),
         "attenuation": round(ferm_result["final_attenuation"], 4),
+        "yeast_strain_id": yeast_strain_id,
+        "yeast_attenuation_min": (
+            round(yeast_strain.attenuation_min.magnitude, 4) if yeast_strain else None
+        ),
+        "yeast_attenuation_max": (
+            round(yeast_strain.attenuation_max.magnitude, 4) if yeast_strain else None
+        ),
     }
 
     return CoupledSimulationResult(mash=mash, boil=boil, ferment=ferment, summary=summary)

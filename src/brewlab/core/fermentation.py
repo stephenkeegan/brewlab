@@ -125,12 +125,22 @@ def fermentation_time_series(
     alpha: Quantity = _DEFAULT_ALPHA * ureg.dimensionless,
     beta: Quantity = _DEFAULT_BETA * ureg.dimensionless,
     yps: Quantity = _DEFAULT_YPS * ureg.dimensionless,
+    attenuation_min: Quantity | None = None,
+    attenuation_max: Quantity | None = None,
+    temperature_min: Quantity | None = None,
+    temperature_max: Quantity | None = None,
 ) -> dict[str, Any]:
     """Simulate batch fermentation over ``duration_hours``.
 
     Returns a dict with time series (hours) and final values for yeast (g/L),
     sugar (g/L), ethanol (g/L), CO2 (g/L), attenuation (fraction), and
     predicted FG (°Plato) / ABV.
+
+    If ``attenuation_min``/``attenuation_max`` are given (from a yeast
+    strain), predicted attenuation is clamped to that range and FG/ABV are
+    recomputed from the clamped attenuation. If ``temperature_min``/
+    ``temperature_max`` are given and the ferment temperature falls outside,
+    ``temperature_warning`` is set.
 
     Classification: mechanistic-structured ODE; parameters are calibration
     targets.
@@ -164,11 +174,35 @@ def fermentation_time_series(
     p = sol.y[2]
     co2 = p * _DEFAULT_CO2_RATIO
 
-    attenuation = (s0 - max(s[-1], 0.0)) / s0 if s0 > 0 else 0.0
-    # Predicted FG (Plato) from residual sugar: ~ sugar_g_per_L / 10
-    fg_plato = max(s[-1] / 10.0, 0.0)
-    # ABV approx from ethanol concentration: ABV(v/v) ~= ethanol_g_per_L / 7.89
-    abv = p[-1] / 7.89
+    raw_attenuation = (s0 - max(s[-1], 0.0)) / s0 if s0 > 0 else 0.0
+
+    attenuation_min_v = (
+        attenuation_min.to("dimensionless").magnitude if attenuation_min is not None else None
+    )
+    attenuation_max_v = (
+        attenuation_max.to("dimensionless").magnitude if attenuation_max is not None else None
+    )
+    attenuation = raw_attenuation
+    if attenuation_min_v is not None and attenuation < attenuation_min_v:
+        attenuation = attenuation_min_v
+    if attenuation_max_v is not None and attenuation > attenuation_max_v:
+        attenuation = attenuation_max_v
+
+    # Recompute residual sugar, FG, ethanol, ABV from clamped attenuation.
+    residual_sugar_g_per_l = s0 * (1.0 - attenuation)
+    fg_plato = max(residual_sugar_g_per_l / 10.0, 0.0)
+    ethanol_g_per_l = max((s0 - residual_sugar_g_per_l) * yps.to("dimensionless").magnitude, 0.0)
+    abv = ethanol_g_per_l / 7.89
+
+    temperature_warning = False
+    if temperature_min is not None:
+        temperature_warning = temperature_warning or (
+            temperature.to("degC").magnitude < temperature_min.to("degC").magnitude
+        )
+    if temperature_max is not None:
+        temperature_warning = temperature_warning or (
+            temperature.to("degC").magnitude > temperature_max.to("degC").magnitude
+        )
 
     return {
         "time_hours": t.tolist(),
@@ -179,7 +213,9 @@ def fermentation_time_series(
         "final_attenuation": float(attenuation),
         "final_fg_plato": float(fg_plato),
         "final_abv_percent": float(abv),
-        "final_ethanol_g_per_L": float(p[-1]),
+        "final_ethanol_g_per_L": float(ethanol_g_per_l),
+        "raw_attenuation": float(raw_attenuation),
+        "temperature_warning": bool(temperature_warning),
         "model_contributions": {
             "kinetics": "Monod growth + Luedeking-Piret ethanol + stoichiometric CO2",
         },

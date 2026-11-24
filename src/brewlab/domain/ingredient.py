@@ -37,6 +37,9 @@ class Yeast:
     flocculation: str  # low/medium/high
     temperature_min: Quantity  # degC
     temperature_max: Quantity  # degC
+    species: str = "cerevisiae"  # cerevisiae | pastorianus
+    alcohol_tolerance: Quantity | None = None  # percent ABV
+    flavor_notes: str = ""  # e.g. clean/neutral, fruity esters, spicy phenolics
 
 
 @dataclass

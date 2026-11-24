@@ -26,6 +26,7 @@ in Python 3.11+. Package name `brewlab`, layout `src/brewlab` + `tests/`.
 | Purpose | Command |
 |---|---|
 | Tests | `.venv/bin/pytest -q` (or `pytest`) |
+| GUI | `streamlit run src/brewlab/gui/app.py` |
 | Lint | `.venv/bin/ruff check src tests` |
 | Format | `.venv/bin/ruff format src tests` |
 | Format check | `.venv/bin/ruff format --check src tests` |
@@ -43,6 +44,7 @@ Always run the full validation before marking work complete.
 - `src/brewlab/persistence/` — JSON/CSV persistence (`json_repo.py`: `JsonRepository`)
 - `src/brewlab/simulation/engine.py` — `simulate_batch()` (mash→boil→ferment)
 - `src/brewlab/optimization/engine.py` — `optimize_recipe()` + `sensitivity()`
+- `src/brewlab/gui/app.py` — Streamlit GUI for recipe input + simulation (run `streamlit run src/brewlab/gui/app.py`)
 - `src/brewlab/cli.py` — `brewlab simulate mash|all` and `brewlab store save|load|list`
 
 ## Current work state

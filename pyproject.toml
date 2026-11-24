@@ -28,6 +28,9 @@ sci = [
     "scipy>=1.11",
     "pint>=0.25",
 ]
+gui = [
+    "streamlit>=1.30",
+]
 
 [project.scripts]
 brewlab = "brewlab.cli:main"

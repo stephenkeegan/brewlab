@@ -65,6 +65,19 @@ brewlab --store ./my_store store load my-ipa
 brewlab --store ./my_store store list
 ```
 
+## GUI
+
+A Streamlit app lets you manipulate recipe inputs (mash, boil, ferment,
+water chemistry, hops) with sliders/number inputs and see the simulated
+OG/FG/ABV/IBU update in real time:
+
+```bash
+streamlit run src/brewlab/gui/app.py
+```
+
+The GUI imports only from the simulation and persistence layers (never the
+other way around), preserving the strict core/UI boundary.
+
 ## Python API
 
 ### Coupled simulation

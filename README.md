@@ -72,8 +72,13 @@ water chemistry, hops) with sliders/number inputs and see the simulated
 OG/FG/ABV/IBU update in real time:
 
 ```bash
-streamlit run src/brewlab/gui/app.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[gui]"
+./run_gui.sh
 ```
+
+Then open `http://localhost:8501` in your browser.
 
 The GUI imports only from the simulation and persistence layers (never the
 other way around), preserving the strict core/UI boundary.

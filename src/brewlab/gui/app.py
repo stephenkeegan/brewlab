@@ -22,6 +22,14 @@ from brewlab.core.fermentation import fermentation_time_series
 from brewlab.domain.yeast_library import YeastLibrary
 from brewlab.persistence.json_repo import JsonRepository
 from brewlab.simulation.engine import simulate_batch
+from brewlab.simulation.flavor_engine import (
+    FlavorLogger,
+    FlavorTarget,
+    _normalize,
+    _raw_flavor_scores,
+    backpropagate_flavor,
+    explore_and_log,
+)
 from brewlab.simulation.solution_space import explore_solution_space
 from brewlab.units import ureg
 
@@ -105,6 +113,48 @@ def _default_recipe() -> dict[str, Any]:
             "initial_yeast_g_per_l": 0.1,
             "volume_liters": 20.0,
             "yeast_strain_id": "US-05",
+        },
+    }
+
+
+def _flavor_exploration_recipe() -> dict[str, Any]:
+    """Base recipe with ranges used for flavor exploration sampling."""
+    return {
+        "name": "Exploration base",
+        "grain_mass_kg": {"min": 4.0, "max": 8.0},
+        "extract_potential": {"min": 0.75, "max": 0.85},
+        "target_mash_temperature_degC": {"min": 63.0, "max": 67.0},
+        "water_to_grain_ratio_l_per_kg": 3.0,
+        "grain_temperature_degC": 20.0,
+        "mash_duration_minutes": 60.0,
+        "batch_size_liters": 20.0,
+        "grain_color_lovibond": 3.0,
+        "water": {
+            "calcium_mg_per_l": 50.0,
+            "magnesium_mg_per_l": 10.0,
+            "bicarbonate_mg_per_l": 150.0,
+            "chloride_mg_per_l": 50.0,
+            "sulfate_mg_per_l": 50.0,
+        },
+        "boil": {
+            "pre_boil_volume_liters": 26.0,
+            "boil_off_rate_l_per_hr": 4.0,
+            "boil_duration_minutes": 60.0,
+            "hops": [
+                {
+                    "amount_kg": {"min": 0.03, "max": 0.09},
+                    "alpha_acid": 0.060,
+                    "time_minutes": 60,
+                },
+                {"amount_kg": 0.02, "alpha_acid": 0.060, "time_minutes": 5},
+            ],
+        },
+        "ferment": {
+            "temperature_degC": {"min": 18.0, "max": 22.0},
+            "duration_hours": 72.0,
+            "initial_yeast_g_per_l": 0.1,
+            "volume_liters": 20.0,
+            "yeast_strain_id": ["US-05", "W-34/74", "S-04"],
         },
     }
 
@@ -701,6 +751,236 @@ def _render_solution_space(
     st.dataframe(sample_df[available].round(3), use_container_width=True, hide_index=True)
 
 
+def _flatten_sample(sample: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a logged sample into a single row of inputs + flavor scores."""
+    ferment = sample.get("ferment", {})
+    boil = sample.get("boil", {})
+    hops = boil.get("hop_additions", [])
+    bittering_kg = 0.0
+    for h in hops:
+        if int(h.get("time_minutes", 0)) >= 45:
+            bittering_kg = float(h.get("amount_kg", 0.0))
+            break
+    summary = sample.get("summary", {})
+    flavor = _normalize(_raw_flavor_scores({"summary": summary, "boil": boil}))
+    return {
+        "grain_mass_kg": float(sample.get("grain_mass_kg", 0.0)),
+        "extract_potential": float(sample.get("extract_potential", 0.0)),
+        "mash_temp_degC": float(sample.get("target_mash_temperature_degC", 0.0)),
+        "ferment_temp_degC": float(ferment.get("temperature_degC", 0.0)),
+        "bittering_hop_kg": bittering_kg,
+        "yeast_strain": ferment.get("yeast_strain_id", ""),
+        **flavor,
+    }
+
+
+def _render_flavor_impact(logged_samples: list[dict[str, Any]]) -> None:
+    """Show how each input impacts each flavor dimension (correlation view)."""
+    st.header("Input → flavor impact")
+    if not logged_samples:
+        st.info("Run flavor exploration to see input→flavor impact.")
+        return
+    rows = [_flatten_sample(s) for s in logged_samples]
+    df = pd.DataFrame(rows)
+    input_cols = [
+        "grain_mass_kg",
+        "extract_potential",
+        "mash_temp_degC",
+        "ferment_temp_degC",
+        "bittering_hop_kg",
+    ]
+    flavor_cols = [
+        "bitterness",
+        "sweetness",
+        "body",
+        "alcohol",
+        "dryness",
+        "hop_aroma",
+    ]
+    col1, col2 = st.columns(2)
+    with col1:
+        x_input = st.selectbox("Input", input_cols, index=0, key="impact_x")
+    with col2:
+        y_flavor = st.selectbox("Flavor dimension", flavor_cols, index=0, key="impact_y")
+    chart = (
+        alt.Chart(df)
+        .mark_circle(size=60, opacity=0.7)
+        .encode(
+            x=alt.X(f"{x_input}:Q", title=x_input.replace("_", " ").title()),
+            y=alt.Y(f"{y_flavor}:Q", title=y_flavor.title()),
+            tooltip=[
+                alt.Tooltip(f"{x_input}:Q", format=".3f"),
+                alt.Tooltip(f"{y_flavor}:Q", format=".1f"),
+                "yeast_strain",
+            ],
+        )
+        .properties(height=300)
+        .interactive()
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    # Correlation table
+    corr_rows: list[dict[str, Any]] = []
+    for inp in input_cols:
+        for fl in flavor_cols:
+            c = df[inp].corr(df[fl])
+            corr_rows.append(
+                {
+                    "input": inp.replace("_", " ").title(),
+                    "flavor": fl.title(),
+                    "correlation": round(float(c), 3) if c == c else 0.0,
+                }
+            )
+    corr_df = pd.DataFrame(corr_rows)
+    st.subheader("Input–flavor correlation")
+    st.dataframe(corr_df, use_container_width=True, hide_index=True)
+
+
+def _render_target_flavor(logged_samples: list[dict[str, Any]], yeast_lib: YeastLibrary) -> None:
+    """Target flavor sliders + back-propagation to recommended inputs."""
+    st.header("Target flavor → recipe (back-propagation)")
+    if not logged_samples:
+        st.info(
+            "Run flavor exploration first to build a sample base, then set a "
+            "target flavor profile below."
+        )
+        return
+
+    st.caption(
+        "Set your desired flavor profile (0-100 each), then click "
+        "**Back-propagate** to find recipe inputs that best match it."
+    )
+
+    # Target sliders
+    cols = st.columns(3)
+    target_vals: dict[str, float] = {}
+    default_target = {
+        "bitterness": 50.0,
+        "sweetness": 50.0,
+        "body": 50.0,
+        "alcohol": 50.0,
+        "dryness": 50.0,
+        "hop_aroma": 50.0,
+    }
+    saved = st.session_state.get("flavor_target", default_target)
+    for i, (dim, key) in enumerate(
+        [
+            ("Bitterness", "bitterness"),
+            ("Sweetness", "sweetness"),
+            ("Body", "body"),
+            ("Alcohol warmth", "alcohol"),
+            ("Dryness", "dryness"),
+            ("Hop aroma", "hop_aroma"),
+        ]
+    ):
+        with cols[i % 3]:
+            target_vals[key] = st.slider(
+                dim,
+                min_value=0.0,
+                max_value=100.0,
+                value=float(saved.get(key, 50.0)),
+                step=5.0,
+                key=f"target_{key}",
+            )
+    st.session_state["flavor_target"] = target_vals
+
+    target = FlavorTarget(**target_vals)
+
+    col_run, col_refine = st.columns(2)
+    with col_run:
+        run_backprop = st.button("Back-propagate", type="primary", use_container_width=True)
+    with col_refine:
+        refine = st.toggle("Refine with optimizer", value=True)
+
+    rec = st.session_state.get("flavor_recommendation")
+    if run_backprop:
+        input_bounds = {
+            "grain_mass_kg": (0.5, 50.0),
+            "extract_potential": (0.5, 0.95),
+            "target_mash_temperature_degC": (45.0, 78.0),
+            "ferment_temperature_degC": (10.0, 30.0),
+            "bittering_hop_amount_kg": (0.0, 0.2),
+        }
+        try:
+            rec = backpropagate_flavor(
+                target,
+                logged_samples,
+                input_bounds=input_bounds,
+                n_samples=int(st.session_state.get("n_flavor_samples", 100)),
+                refine=refine,
+            )
+            st.session_state["flavor_recommendation"] = rec
+        except Exception as exc:  # noqa: BLE001 — surface to user
+            st.error(f"Back-propagation failed: {exc}")
+            rec = None
+
+    if rec is None:
+        rec = st.session_state.get("flavor_recommendation")
+
+    if rec:
+        st.subheader("Recommended inputs")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Method", rec.method)
+        c2.metric("Distance", f"{rec.distance:.2f}")
+        c3.metric("Predicted bitterness", f"{rec.predicted.get('bitterness', 0):.0f}")
+        c4.metric("Predicted ABV warmth", f"{rec.predicted.get('alcohol', 0):.0f}")
+
+        st.write("**Predicted flavor (0-100):**")
+        pred_cols = st.columns(3)
+        for i, (dim, key) in enumerate(
+            [
+                ("Bitterness", "bitterness"),
+                ("Sweetness", "sweetness"),
+                ("Body", "body"),
+                ("Alcohol warmth", "alcohol"),
+                ("Dryness", "dryness"),
+                ("Hop aroma", "hop_aroma"),
+            ]
+        ):
+            with pred_cols[i % 3]:
+                st.metric(dim, f"{rec.predicted.get(key, 0):.0f}")
+
+        st.write("**Recommended recipe inputs:**")
+        inputs = rec.inputs
+        disp = {
+            "Grain mass (kg)": inputs.get("grain_mass_kg"),
+            "Extract potential": inputs.get("extract_potential"),
+            "Mash temp (°C)": inputs.get("target_mash_temperature_degC"),
+            "Ferment temp (°C)": (
+                inputs.get("ferment", {}).get("temperature_degC")
+                if isinstance(inputs.get("ferment"), dict)
+                else None
+            ),
+            "Bittering hop (kg)": (
+                inputs.get("boil", {}).get("hops", [{}])[0].get("amount_kg")
+                if isinstance(inputs.get("boil"), dict)
+                else None
+            ),
+            "Yeast strain": (
+                inputs.get("ferment", {}).get("yeast_strain_id")
+                if isinstance(inputs.get("ferment"), dict)
+                else None
+            ),
+        }
+        st.json(disp)
+
+        if st.button("Apply recommendation to active scenario", use_container_width=True):
+            scenarios = st.session_state.get("scenarios", {})
+            active = st.session_state.get("active_scenario")
+            if active and active in scenarios:
+                scenarios[active] = inputs
+                st.session_state["scenarios"] = scenarios
+                st.session_state["results"] = {}
+                st.session_state["solution"] = None
+                st.session_state["flavor_recommendation"] = None
+                st.success(
+                    f"Applied recommendation to '{active}'. Run simulation(s) to see results."
+                )
+                st.rerun()
+            else:
+                st.error("No active scenario to apply to.")
+
+
 def _render_recipe_editor(store: JsonRepository[dict[str, Any]]) -> None:
     st.header("Save / load recipe")
     col1, col2 = st.columns(2)
@@ -794,6 +1074,40 @@ def _render_scenario_manager() -> tuple[dict[str, dict[str, Any]], str, bool]:
             st.session_state["solution"] = None
 
     st.sidebar.divider()
+    st.sidebar.subheader("Flavor exploration")
+    n_flavor_samples = st.sidebar.number_input(
+        "Exploration samples",
+        min_value=10,
+        max_value=1000,
+        value=int(st.session_state.get("n_flavor_samples", 100)),
+        step=10,
+        help="Randomized simulations to log for flavor back-propagation",
+    )
+    st.session_state["n_flavor_samples"] = n_flavor_samples
+    if st.sidebar.button("Run flavor exploration", use_container_width=True):
+        try:
+            exploration = explore_and_log(
+                _flavor_exploration_recipe(),
+                n_samples=n_flavor_samples,
+            )
+            st.session_state["flavor_logged_count"] = exploration.get("logged_total", 0)
+            st.session_state["flavor_recommendation"] = None
+            st.sidebar.success(
+                f"Logged {exploration.get('n_samples', 0)} samples "
+                f"({exploration.get('logged_total', 0)} total)."
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to user
+            st.error(f"Flavor exploration failed: {exc}")
+    logger_count = len(FlavorLogger().load())
+    st.sidebar.caption(f"Logged flavor samples: {logger_count}")
+    if st.sidebar.button("Clear exploration log", use_container_width=True):
+        FlavorLogger().clear()
+        st.session_state["flavor_logged_count"] = 0
+        st.session_state["flavor_recommendation"] = None
+        st.sidebar.success("Exploration log cleared.")
+        st.rerun()
+
+    st.sidebar.divider()
     st.sidebar.subheader("Benchmark templates")
     templates = _load_template_recipes()
     if templates:
@@ -833,6 +1147,8 @@ def main() -> None:
     yeast_lib = YeastLibrary()
     scenarios, active, solution_space_mode = _render_scenario_manager()
 
+    logged_samples = FlavorLogger().load()
+
     recipe = scenarios.get(active, _default_recipe())
     if solution_space_mode:
         recipe = _sidebar_range_inputs(recipe, prefix="ss_")
@@ -850,31 +1166,70 @@ def main() -> None:
     )
 
     if solution:
-        tab_solution, tab_flavor, tab_ferment, tab_bitter = st.tabs(
-            ["Solution space", "Flavor profile", "Fermentation", "Bitterness"]
+        (
+            tab_solution,
+            tab_flavor,
+            tab_impact,
+            tab_ferment,
+            tab_bitter,
+            tab_target,
+        ) = st.tabs(
+            [
+                "Solution space",
+                "Flavor profile",
+                "Flavor impact",
+                "Fermentation",
+                "Bitterness",
+                "Target flavor",
+            ]
         )
         with tab_solution:
             _render_solution_space(solution)
         with tab_flavor:
             _render_flavor(results, selection)
+        with tab_impact:
+            _render_flavor_impact(logged_samples)
         with tab_ferment:
             _render_fermentation(results, scenarios, selection)
         with tab_bitter:
             _render_bitterness(results, selection)
+        with tab_target:
+            _render_target_flavor(logged_samples, yeast_lib)
     elif results:
-        tab_overview, tab_flavor, tab_ferment, tab_bitter = st.tabs(
-            ["Overview", "Flavor profile", "Fermentation", "Bitterness"]
+        (
+            tab_overview,
+            tab_flavor,
+            tab_impact,
+            tab_ferment,
+            tab_bitter,
+            tab_target,
+        ) = st.tabs(
+            [
+                "Overview",
+                "Flavor profile",
+                "Flavor impact",
+                "Fermentation",
+                "Bitterness",
+                "Target flavor",
+            ]
         )
         with tab_overview:
             _render_overview(results, selection)
         with tab_flavor:
             _render_flavor(results, selection)
+        with tab_impact:
+            _render_flavor_impact(logged_samples)
         with tab_ferment:
             _render_fermentation(results, scenarios, selection)
         with tab_bitter:
             _render_bitterness(results, selection)
+        with tab_target:
+            _render_target_flavor(logged_samples, yeast_lib)
     else:
-        st.info("Configure scenarios in the sidebar, then click **Run simulation(s)**.")
+        st.info(
+            "Configure scenarios in the sidebar, then click "
+            "**Run simulation(s)** or **Run flavor exploration**."
+        )
 
     st.divider()
     st.header("Save / load recipes")

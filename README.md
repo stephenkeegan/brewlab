@@ -49,6 +49,22 @@ brewlab simulate mash recipes/example.json
 brewlab simulate all recipes/example.json
 ```
 
+## Persistence (store)
+
+The CLI includes a JSON file store for recipes and simulation results
+(default directory `.brewlab_store`, overridable with `--store`).
+
+```bash
+# Save a recipe under id "my-ipa"
+brewlab --store ./my_store store save my-ipa recipes/example.json
+
+# Load and print a stored item
+brewlab --store ./my_store store load my-ipa
+
+# List stored item ids
+brewlab --store ./my_store store list
+```
+
 ## Python API
 
 ### Coupled simulation

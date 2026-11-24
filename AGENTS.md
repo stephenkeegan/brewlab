@@ -40,10 +40,10 @@ Always run the full validation before marking work complete.
 - `src/brewlab/core/` — thermodynamics, equilibrium, kinetics
 - `src/brewlab/domain/` — domain models (recipe, batch, measurement)
 - `src/brewlab/data/` — CSV ingestion, measurement calibration
-- `src/brewlab/persistence/` — JSON/CSV persistence
+- `src/brewlab/persistence/` — JSON/CSV persistence (`json_repo.py`: `JsonRepository`)
 - `src/brewlab/simulation/engine.py` — `simulate_batch()` (mash→boil→ferment)
 - `src/brewlab/optimization/engine.py` — `optimize_recipe()` + `sensitivity()`
-- `src/brewlab/cli.py` — `brewlab simulate mash|all`
+- `src/brewlab/cli.py` — `brewlab simulate mash|all` and `brewlab store save|load|list`
 
 ## Current work state
 
@@ -51,6 +51,8 @@ Always run the full validation before marking work complete.
   coupled simulation engine, data integration.
 - Phase 6 complete: optimization engine (`optimize_recipe`, `sensitivity`),
   tests in `tests/test_optimization.py`.
+- Phase 7 complete: persistence layer (`JsonRepository`, CLI `store save|load|list`),
+  tests in `tests/test_persistence.py`.
 - Docs: README.md + this AGENTS.md written. `docs/models/` has 6 model docs.
 
 ## Tests
@@ -58,6 +60,7 @@ Always run the full validation before marking work complete.
 - `tests/test_data.py` — ingestion + calibration (Measurement now has
   `calibrated_at` field)
 - `tests/test_optimization.py` — optimization + sensitivity (Phase 6)
+- `tests/test_persistence.py` — JSON repository round-trips (Phase 7)
 - Other test files cover core/domain/simulation.
 
 When adding a feature, add tests in the matching `tests/test_*.py` file and

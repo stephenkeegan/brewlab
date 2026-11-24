@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from brewlab import __version__
@@ -44,6 +45,7 @@ from brewlab.core.kinetics import (
     saccharification_conversion,
 )
 from brewlab.core.thermodynamics import strike_water_temperature
+from brewlab.persistence.json_repo import JsonRepository
 from brewlab.simulation.engine import simulate_batch
 from brewlab.units import ureg
 
@@ -290,7 +292,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Output format",
     )
 
+    store = sub.add_parser("store", help="Persist recipes / simulation results")
+    store_sub = store.add_subparsers(dest="store_command")
+
+    save = store_sub.add_parser("save", help="Save an item to the store")
+    save.add_argument("id", help="Item id")
+    save.add_argument("file", help="Path to JSON file (or '-' to read from stdin)")
+
+    load = store_sub.add_parser("load", help="Load and print a stored item")
+    load.add_argument("id", help="Item id")
+
+    store_sub.add_parser("list", help="List stored item ids")
+
     parser.add_argument("--version", action="store_true", help="show version")
+    parser.add_argument(
+        "--store",
+        default=".brewlab_store",
+        help="Directory for the JSON persistence store",
+    )
     args = parser.parse_args(argv)
 
     if args.version:
@@ -342,6 +361,36 @@ def main(argv: list[str] | None = None) -> int:
         result = simulate_all(recipe)
         print(json.dumps(result, indent=2))
         return 0
+
+    if args.command == "store":
+        store_dir = Path(args.store)
+        repo = JsonRepository[dict[str, Any]](store_dir)
+        if args.store_command == "save":
+            source = args.file
+            if source == "-":
+                item = json.load(sys.stdin)
+            else:
+                with open(source, encoding="utf-8") as fh:
+                    item = json.load(fh)
+            repo.add(item)
+            print(json.dumps({"id": args.id, "saved": True}, indent=2))
+            return 0
+        if args.store_command == "load":
+            item = repo.get(args.id)
+            if item is None:
+                print(json.dumps({"error": f"not found: {args.id}"}, indent=2))
+                return 1
+            print(json.dumps(item, indent=2))
+            return 0
+        if args.store_command == "list":
+            items = repo.list()
+            print(
+                json.dumps(
+                    [i.get("id") if isinstance(i, dict) else getattr(i, "id", None) for i in items],
+                    indent=2,
+                )
+            )
+            return 0
 
     parser.print_help()
     return 0

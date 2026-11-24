@@ -23,6 +23,16 @@ from brewlab.core.equilibrium import (
     carbonate_system_ph,
     residual_alkalinity,
 )
+from brewlab.core.fermentation import (
+    DEFAULT_ALPHA,
+    DEFAULT_BETA,
+    DEFAULT_INITIAL_YEAST,
+    DEFAULT_KS,
+    DEFAULT_MU_MAX,
+    DEFAULT_YPS,
+    DEFAULT_YXS,
+    fermentation_time_series,
+)
 from brewlab.core.hops import (
     alpha_acid_isomerization_fraction,
     iso_alpha_concentration,
@@ -183,6 +193,41 @@ def simulate_boil(boil: dict[str, Any], pre_boil_plato: float) -> dict[str, Any]
     }
 
 
+def simulate_ferment(ferm: dict[str, Any]) -> dict[str, Any]:
+    """Run a fermentation simulation.
+
+    Expected ferm keys:
+        initial_sugar_g_per_l, initial_yeast_g_per_l, volume_liters,
+        temperature_degC, duration_hours
+    Optional kinetic overrides: mu_max_1_per_hour, ks_gram_per_liter,
+    yxs, alpha, beta, yps
+    """
+    result = fermentation_time_series(
+        _q(ferm["initial_sugar_g_per_l"], "gram / liter"),
+        _q(ferm.get("initial_yeast_g_per_l", DEFAULT_INITIAL_YEAST), "gram / liter"),
+        _q(ferm["volume_liters"], "liter"),
+        _q(ferm["temperature_degC"], "degC"),
+        _q(ferm["duration_hours"], "hour"),
+        mu_max=_q(ferm.get("mu_max_1_per_hour", DEFAULT_MU_MAX), "1 / hour"),
+        ks=_q(ferm.get("ks_gram_per_liter", DEFAULT_KS), "gram / liter"),
+        yxs=_q(ferm.get("yxs", DEFAULT_YXS), "dimensionless"),
+        alpha=_q(ferm.get("alpha", DEFAULT_ALPHA), "dimensionless"),
+        beta=_q(ferm.get("beta", DEFAULT_BETA), "dimensionless"),
+        yps=_q(ferm.get("yps", DEFAULT_YPS), "dimensionless"),
+    )
+    return {
+        "stage": "ferment",
+        "initial_sugar_g_per_l": ferm["initial_sugar_g_per_l"],
+        "temperature_degC": ferm["temperature_degC"],
+        "duration_hours": ferm["duration_hours"],
+        "final_attenuation": round(result["final_attenuation"], 4),
+        "final_fg_plato": round(result["final_fg_plato"], 3),
+        "final_abv_percent": round(result["final_abv_percent"], 2),
+        "final_ethanol_g_per_L": round(result["final_ethanol_g_per_L"], 2),
+        "model_contributions": result["model_contributions"],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="brewlab", description="BrewLab CLI")
     sub = parser.add_subparsers(dest="command")
@@ -208,6 +253,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to JSON recipe file (or '-' to read from stdin)",
     )
     boil.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format",
+    )
+
+    ferment = sim_sub.add_parser("ferment", help="Fermentation simulation")
+    ferment.add_argument(
+        "recipe",
+        help="Path to JSON recipe file (or '-' to read from stdin)",
+    )
+    ferment.add_argument(
         "--format",
         choices=["json"],
         default="json",
@@ -242,6 +299,17 @@ def main(argv: list[str] | None = None) -> int:
         boil_section = recipe.get("boil", recipe)
         pre_boil_plato = recipe.get("pre_boil_plato", recipe.get("extract_degPlato", 10.0))
         result = simulate_boil(boil_section, pre_boil_plato)
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.command == "simulate" and args.sim_command == "ferment":
+        source = args.recipe
+        if source == "-":
+            recipe = json.load(sys.stdin)
+        else:
+            with open(source, encoding="utf-8") as fh:
+                recipe = json.load(fh)
+        result = simulate_ferment(recipe)
         print(json.dumps(result, indent=2))
         return 0
 

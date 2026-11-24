@@ -1,0 +1,7 @@
+{
+  "initial_sugar_g_per_l": 100.0,
+  "initial_yeast_g_per_l": 0.1,
+  "volume_liters": 20.0,
+  "temperature_degC": 20.0,
+  "duration_hours": 72.0
+}

@@ -131,23 +131,46 @@ Explicitly OUT of MVP: molecular dynamics, ML, Bayesian optimization, fermentati
 
 ## 8. Phased development roadmap
 
-**Phase 0 — Foundation**
-1. Provision Python env (venv + pip; `uv` optional), install `numpy scipy pint pytest ruff mypy`.
-2. Scaffold repo layout per §3; add `pyproject.toml` (package `brewlab`, Python >=3.11).
-3. Implement `units.py` (pint singleton + brewing aliases) + `test_units.py`.
-4. Add CI config: run `pytest`, `ruff`, `mypy` on every change.
-5. Add `docs/models/` template.
+**Phase 0 — Foundation** — DONE (committed b7f0c57)
+- Python venv provisioned; `numpy scipy pint pytest ruff mypy` installed
+- Repo layout per §3; `pyproject.toml` (package `brewlab`, Python >=3.11)
+- `units.py` (pint singleton + brewing aliases) + `test_units.py`
+- CI config (pytest, ruff, mypy); `.github/workflows/ci.yml`
+- `docs/models/` template
 
-**Phase 1 — MVP scientific core**
-1. Implement water chemistry (ionic strength, charge balance, carbonate/phosphate acid-base, mash pH, mineral adjustment) + `test_equilibrium.py` vs. published buffer pH values.
-2. Implement mash enzymatics (gelatinization window, alpha/beta amylase saccharification Arrhenius kinetics, extract/°Plato prediction) + `test_kinetics.py` vs. published extract yields.
-3. Implement thermodynamics strike-water heat balance + `test_thermo.py`.
-4. Implement domain models (WaterProfile, Malt, Hop, Yeast, Recipe, Batch, Equipment, MashStage/BoilStage) + `test_domain.py`.
-5. Add `docs/models/*.md` for each model (equation, parameters, assumptions, limitations, literature source).
-6. Add CLI `brewlab simulate mash --recipe ... --equipment ...` printing structured results.
-7. Run `pytest`, `ruff`, `mypy` — all green.
+**Phase 1 — MVP scientific core** — DONE (committed b7f0c57)
+- Water chemistry: ionic strength, alkalinity-as-CaCO3, hardness,
+  residual alkalinity, carbonate-system pH solver + `test_equilibrium.py`
+- Mash enzymatics: gelatinization, alpha/beta-amylase, saccharification
+  conversion, extract/°Plato + `test_kinetics.py`
+- Thermodynamics: strike-water heat balance + `test_thermo.py`
+- Domain models: WaterProfile, Malt, Hop, Yeast, Recipe, Batch, Equipment,
+  MashStage/BoilStage + `test_domain.py`
+- `docs/models/*.md` for each model
+- CLI `brewlab simulate mash`
+- `pytest`/`ruff`/`mypy` all green
 
-**Out of MVP (deferred):** molecular dynamics, ML, Bayesian optimization, fermentation model, instrumentation API, GUI/app layer, persistence backend, hardware connectivity, boil/hop utilization (Phase 2), fermentation basics (Phase 3), coupled simulation engine (Phase 4).
+**Phase 2 — Boil & hop utilization** — DONE (committed 7958322)
+- `core/boil.py`: boil-off volume, wort plato after boil (extract-mass
+  balance), plato<->specific gravity (ASBC/EBC fit)
+- `core/hops.py`: alpha-acid isomerization (first-order Arrhenius),
+  iso-alpha acid concentration, predicted IBU (utilization efficiency);
+  Arrhenius/utilization parameters flagged as calibration targets
+- `test_boil.py`, `test_hops.py`; `docs/models` for boil + hops
+- CLI `brewlab simulate boil`
+- `pytest`/`ruff`/`mypy` all green
+
+**Phase 3 — Fermentation basics** (next)
+- Yeast growth (Monod/logistic), substrate consumption, ethanol & CO2
+  production, attenuation, temperature-dependent rates
+- `core/fermentation.py` + `test_fermentation.py`; `docs/models`
+- Couple mash → boil → ferment stage outputs
+
+**Out of MVP (deferred):** molecular dynamics, ML, Bayesian optimization,
+instrumentation API, GUI/app layer, persistence backend, hardware
+connectivity, coupled simulation engine (Phase 4), data integration
+(Phase 5), optimization engine (Phase 6).
+
 
 
 ## 9. Identified technical and scientific risks

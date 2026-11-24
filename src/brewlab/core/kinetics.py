@@ -150,10 +150,11 @@ def arrhenius_rate(
 
     Classification: mechanistic.
     """
-    exponent: Quantity = -(activation_energy / (gas_constant * temperature)).to("dimensionless")
-    return (pre_exponential * ureg.Quantity(exponent.magnitude, "dimensionless")).to(
-        pre_exponential.units
-    )
+    # Work in kelvin (absolute) to avoid pint offset-unit calculus with degC.
+    temperature_k = temperature.to("kelvin")
+    exponent: Quantity = -(activation_energy / (gas_constant * temperature_k)).to("dimensionless")
+    k: Quantity = pre_exponential * math.exp(exponent.magnitude)
+    return k.to(pre_exponential.units)
 
 
 __all__ = [

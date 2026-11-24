@@ -1,14 +1,8 @@
 """Command-line interface for brewlab.
 
-Phase 1 provides ``brewlab simulate mash`` which runs a units-checked
-single-infusion mash simulation end-to-end:
-
-    strike-water temperature  (thermodynamics)
-    water pH                  (equilibrium / carbonate system)
-    saccharification          (kinetics / alpha-beta amylase)
-    extract in degPlato       (kinetics)
-
-Results are printed as JSON for easy inspection and downstream use.
+Phase 1 provides ``brewlab simulate mash`` (single-infusion mash) and Phase 2
+adds ``brewlab simulate boil`` (boil-off, wort concentration, hop
+isomerization, IBU). Results are printed as JSON.
 """
 
 from __future__ import annotations
@@ -19,10 +13,20 @@ import sys
 from typing import Any
 
 from brewlab import __version__
+from brewlab.core.boil import (
+    boil_off_volume,
+    plato_to_specific_gravity,
+    wort_plato_after_boil,
+)
 from brewlab.core.equilibrium import (
     alkalinity_as_caco3_from_bicarbonate,
     carbonate_system_ph,
     residual_alkalinity,
+)
+from brewlab.core.hops import (
+    alpha_acid_isomerization_fraction,
+    iso_alpha_concentration,
+    predicted_ibu,
 )
 from brewlab.core.kinetics import (
     extract_plato,
@@ -88,6 +92,7 @@ def simulate_mash(recipe: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "name": recipe.get("name", "mash"),
+        "stage": "mash",
         "strike_water_temperature_degC": round(strike_temp.to("degC").magnitude, 2),
         "target_mash_temperature_degC": target_temp.to("degC").magnitude,
         # NOTE: this is the carbonate-system water pH at mash temperature.
@@ -111,6 +116,73 @@ def simulate_mash(recipe: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def simulate_boil(boil: dict[str, Any], pre_boil_plato: float) -> dict[str, Any]:
+    """Run a boil stage simulation.
+
+    Expected boil keys:
+        pre_boil_volume_liters, boil_off_rate_l_per_hr,
+        boil_duration_minutes, hops: [{amount_kg, alpha_acid, time_minutes}]
+
+    ``pre_boil_plato`` is the wort strength entering the boil (from mash).
+    """
+    pre_boil_volume = _q(boil["pre_boil_volume_liters"], "liter")
+    boil_off_rate = _q(boil["boil_off_rate_l_per_hr"], "liter / hour")
+    duration = _q(boil["boil_duration_minutes"], "minute")
+
+    # 1. Boil-off volume
+    post_boil_volume = boil_off_volume(pre_boil_volume, boil_off_rate, duration)
+
+    # 2. Wort concentration after boil (extract conserved)
+    post_boil_plato = wort_plato_after_boil(
+        _q(pre_boil_plato, "degPlato"),
+        pre_boil_volume,
+        boil_off_rate,
+        duration,
+    )
+    post_boil_sg = plato_to_specific_gravity(post_boil_plato)
+
+    # 3. Hop isomerization + IBU per addition (all at boil temperature)
+    boil_temp = _q(100.0, "degC")  # atmospheric boil; calibration target
+    total_ibu = 0.0
+    hop_additions = []
+    for hop in boil.get("hops", []):
+        amount = _q(hop["amount_kg"], "kilogram")
+        alpha = _q(hop["alpha_acid"], "dimensionless")
+        time_remaining = _q(hop["time_minutes"], "minute")
+        iso_frac = alpha_acid_isomerization_fraction(time_remaining, boil_temp)
+        iso_conc = iso_alpha_concentration(amount, alpha, pre_boil_volume, iso_frac)
+        ibu = predicted_ibu(iso_conc)
+        total_ibu += ibu.to("IBU").magnitude
+        hop_additions.append(
+            {
+                "amount_kg": hop["amount_kg"],
+                "alpha_acid": hop["alpha_acid"],
+                "time_minutes": hop["time_minutes"],
+                "isomerized_fraction": round(iso_frac.magnitude, 4),
+                "iso_alpha_mg_per_L": round(iso_conc.to("milligram / liter").magnitude, 2),
+                "ibu": round(ibu.to("IBU").magnitude, 2),
+            }
+        )
+
+    return {
+        "stage": "boil",
+        "pre_boil_volume_liters": pre_boil_volume.to("liter").magnitude,
+        "post_boil_volume_liters": round(post_boil_volume.to("liter").magnitude, 2),
+        "boil_off_rate_l_per_hr": boil_off_rate.to("liter / hour").magnitude,
+        "boil_duration_minutes": duration.to("minute").magnitude,
+        "pre_boil_plato": pre_boil_plato,
+        "post_boil_plato": round(post_boil_plato.to("degPlato").magnitude, 2),
+        "post_boil_specific_gravity": round(post_boil_sg.magnitude, 4),
+        "total_ibu": round(total_ibu, 2),
+        "hop_additions": hop_additions,
+        "model_contributions": {
+            "thermodynamics": "boil-off volume / wort concentration",
+            "kinetics": "alpha-acid isomerization (first-order Arrhenius)",
+            "hops": "IBU from iso-alpha acid + utilization efficiency",
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="brewlab", description="BrewLab CLI")
     sub = parser.add_subparsers(dest="command")
@@ -124,6 +196,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to JSON recipe file (or '-' to read from stdin)",
     )
     mash.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format",
+    )
+
+    boil = sim_sub.add_parser("boil", help="Boil stage simulation")
+    boil.add_argument(
+        "recipe",
+        help="Path to JSON recipe file (or '-' to read from stdin)",
+    )
+    boil.add_argument(
         "--format",
         choices=["json"],
         default="json",
@@ -145,6 +229,19 @@ def main(argv: list[str] | None = None) -> int:
             with open(source, encoding="utf-8") as fh:
                 recipe = json.load(fh)
         result = simulate_mash(recipe)
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.command == "simulate" and args.sim_command == "boil":
+        source = args.recipe
+        if source == "-":
+            recipe = json.load(sys.stdin)
+        else:
+            with open(source, encoding="utf-8") as fh:
+                recipe = json.load(fh)
+        boil_section = recipe.get("boil", recipe)
+        pre_boil_plato = recipe.get("pre_boil_plato", recipe.get("extract_degPlato", 10.0))
+        result = simulate_boil(boil_section, pre_boil_plato)
         print(json.dumps(result, indent=2))
         return 0
 

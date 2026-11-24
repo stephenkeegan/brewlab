@@ -1,0 +1,14 @@
+{
+  "name": "Test Pale Ale",
+  "pre_boil_plato": 12.0,
+  "boil": {
+    "pre_boil_volume_liters": 26.0,
+    "boil_off_rate_l_per_hr": 4.0,
+    "boil_duration_minutes": 60.0,
+    "hops": [
+      { "amount_kg": 0.06, "alpha_acid": 0.055, "time_minutes": 60 },
+      { "amount_kg": 0.03, "alpha_acid": 0.055, "time_minutes": 15 },
+      { "amount_kg": 0.02, "alpha_acid": 0.015, "time_minutes": 5 }
+    ]
+  }
+}

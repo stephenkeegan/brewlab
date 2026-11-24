@@ -28,6 +28,7 @@ class Measurement:
     stage: str | None = None
     instrument: str | None = None
     uncertainty: Quantity | None = None
+    calibrated_at: datetime | None = None
 
 
 @dataclass

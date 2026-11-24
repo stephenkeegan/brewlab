@@ -44,6 +44,7 @@ from brewlab.core.kinetics import (
     saccharification_conversion,
 )
 from brewlab.core.thermodynamics import strike_water_temperature
+from brewlab.simulation.engine import simulate_batch
 from brewlab.units import ureg
 
 
@@ -228,6 +229,12 @@ def simulate_ferment(ferm: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def simulate_all(recipe: dict[str, Any]) -> dict[str, Any]:
+    """Run the full mash -> boil -> ferment batch simulation."""
+    result = simulate_batch(recipe)
+    return result.as_dict()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="brewlab", description="BrewLab CLI")
     sub = parser.add_subparsers(dest="command")
@@ -265,6 +272,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to JSON recipe file (or '-' to read from stdin)",
     )
     ferment.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format",
+    )
+
+    all_cmd = sim_sub.add_parser("all", help="Full mash->boil->ferment batch")
+    all_cmd.add_argument(
+        "recipe",
+        help="Path to JSON recipe file (or '-' to read from stdin)",
+    )
+    all_cmd.add_argument(
         "--format",
         choices=["json"],
         default="json",
@@ -310,6 +329,17 @@ def main(argv: list[str] | None = None) -> int:
             with open(source, encoding="utf-8") as fh:
                 recipe = json.load(fh)
         result = simulate_ferment(recipe)
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.command == "simulate" and args.sim_command == "all":
+        source = args.recipe
+        if source == "-":
+            recipe = json.load(sys.stdin)
+        else:
+            with open(source, encoding="utf-8") as fh:
+                recipe = json.load(fh)
+        result = simulate_all(recipe)
         print(json.dumps(result, indent=2))
         return 0
 
